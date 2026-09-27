@@ -6,6 +6,7 @@ let rewireMode = false;
 let mainObserver = null;
 let filterInterval = null;
 let searchGuardActive = false;
+let allowShorts = false;
 const cardDecisions = new WeakMap();
 
 // ── VIDEO QUEUE ───────────────────────────────────────────────────────────
@@ -17,9 +18,10 @@ let videoQueueIndex = 0;
 // ── BOOT ──────────────────────────────────────────────────────────────────
 
 chrome.storage.local.get(
-  ["activeFocusProfile", "currentMode", "rewireMode", "videoQueue", "videoQueueIndex"],
+  ["activeFocusProfile", "currentMode", "rewireMode", "videoQueue", "videoQueueIndex", "allowShorts"],
   (data) => {
     if (data.currentMode) currentMode = data.currentMode;
+    if (data.allowShorts !== undefined) allowShorts = data.allowShorts;
     if (data.videoQueue) { videoQueue = data.videoQueue; }
     if (data.videoQueueIndex) { videoQueueIndex = data.videoQueueIndex; }
     if (data.activeFocusProfile) {
@@ -53,6 +55,10 @@ chrome.runtime.onMessage.addListener((message) => {
     rewireMode = message.enabled;
     rewireMode ? activateRewireMode() : deactivateRewireMode();
   }
+  if (message.type === "SET_ALLOW_SHORTS") {
+    allowShorts = message.allowShorts;
+    if (focusProfile) runPageFilter();
+  }
 });
 
 // ── CORE ENGINE ───────────────────────────────────────────────────────────
@@ -73,6 +79,10 @@ function runPageFilter() {
   hideDistractingElements();
 
   if (path.startsWith("/shorts")) {
+    if (!allowShorts) {
+      window.location.href = "/";
+      return;
+    }
     filterShortsPage();
   } else if (path.startsWith("/watch")) {
     applyWatchPageMode();
@@ -91,12 +101,22 @@ function filterFeedCards() {
   document.querySelectorAll([
     "ytd-rich-item-renderer",
     "ytd-video-renderer",
-    "ytd-grid-video-renderer"
+    "ytd-grid-video-renderer",
+    "ytd-reel-item-renderer"
   ].join(",")).forEach(card => {
-    // Block Shorts overlay cards
-    if (card.querySelector("[overlay-style='SHORTS']")) {
-      killCard(card, "short");
+    // Check for sponsored content first
+    if (isSponsoredContent(card)) {
+      killCard(card, "sponsor");
       return;
+    }
+    
+    // Block Shorts overlay cards unless conditionally allowed
+    const isShort = card.tagName.toLowerCase() === "ytd-reel-item-renderer" || card.querySelector("[overlay-style='SHORTS']") !== null;
+    if (isShort) {
+      if (!allowShorts) {
+        killCard(card, "short");
+        return;
+      }
     }
     const title = extractTitle(card);
     if (!title) { cardDecisions.delete(card); return; }
@@ -104,11 +124,93 @@ function filterFeedCards() {
     cardDecisions.set(card, title);
 
     if (shouldBlock(title, focusProfile)) {
-      killCard(card, "video", title);
+      killCard(card, isShort ? "short" : "video", title);
     } else {
       card.style.removeProperty("display");
     }
   });
+}
+
+// Check if a card contains sponsored/advertisement content
+function isSponsoredContent(card) {
+  // Check for explicit sponsor indicators
+  const sponsorSelectors = [
+    // Direct sponsor text indicators
+    '[aria-label*="Sponsored"]',
+    '[title*="Sponsored"]',
+    '.ytd-promoted-sparkles-text-search-renderer',
+    '.ytd-ad-slot-renderer',
+    '.ytd-promoted-video-renderer',
+    '.ytd-display-ad-renderer',
+    '.ytd-in-feed-ad-layout-renderer',
+    '.ytd-statement-banner-renderer',
+    '.ytd-banner-promo-renderer',
+    
+    // Text-based sponsor indicators
+    '*[aria-label*="Ad"]',
+    '*[title*="Ad"]',
+    '*[aria-label*="Promoted"]',
+    '*[title*="Promoted"]',
+    
+    // YouTube's sponsor badge selectors
+    '.ytd-badge-supported-renderer[aria-label*="Sponsor"]',
+    '.ytd-badge-supported-renderer[aria-label*="Ad"]',
+    '.badge-style-type-simple.ytd-badge-supported-renderer',
+    
+    // Overlay indicators
+    '.ytp-ad-overlay-container',
+    '.ytp-ad-text',
+    '.ytp-ad-preview-container'
+  ];
+  
+  // Check for sponsor selectors
+  for (const selector of sponsorSelectors) {
+    if (card.querySelector(selector)) {
+      return true;
+    }
+  }
+  
+  // Check for sponsor text in various elements
+  const textElements = card.querySelectorAll('span, div, p, a, [aria-label]');
+  for (const el of textElements) {
+    const text = (el.textContent || el.getAttribute('aria-label') || '').toLowerCase();
+    if (text.includes('sponsored') || 
+        text.includes('promoted') || 
+        text.match(/^ad\s/) || 
+        text.includes('advertisement') ||
+        text.includes('sponsor') ||
+        text.match(/\bad\b/) && text.length < 10) {
+      return true;
+    }
+  }
+  
+  // Check for promotional channel indicators
+  const channelName = card.querySelector('#channel-name, .ytd-channel-name, #text.ytd-channel-name');
+  if (channelName) {
+    const channelText = channelName.textContent?.toLowerCase() || '';
+    if (channelText.includes('promoted') || channelText.includes('sponsored')) {
+      return true;
+    }
+  }
+  
+  // Check for YouTube's promoted content structure
+  if (card.querySelector('.ytd-promoted-sparkles-text-search-renderer') ||
+      card.querySelector('[class*="promoted"]') ||
+      card.querySelector('[class*="sponsor"]') ||
+      card.querySelector('[class*="ad-"]')) {
+    return true;
+  }
+  
+  // Check parent containers for ad indicators
+  const parent = card.closest('ytd-item-section-renderer, ytd-rich-section-renderer');
+  if (parent) {
+    const parentText = parent.textContent?.toLowerCase() || '';
+    if (parentText.includes('sponsored') || parentText.includes('promoted')) {
+      return true;
+    }
+  }
+  
+  return false;
 }
 
 // Collect all currently visible on-topic video links from the feed
@@ -149,6 +251,7 @@ function killCard(card, type, title = "") {
   if (!card.dataset.frTracked) {
     card.dataset.frTracked = "1";
     if (type === "short") trackStat("shortsBlocked");
+    else if (type === "sponsor") trackStat("sponsorsBlocked");
     else { trackStat("blockedVideos"); if (title) logEvent("video", title); }
   }
 }
@@ -222,6 +325,7 @@ function injectWatchPanel() {
     color: #f0f0f0;
     margin-left: 16px;
     box-sizing: border-box;
+    overflow: hidden;
   `;
 
   const queueLen = videoQueue.length;
@@ -244,18 +348,20 @@ function injectWatchPanel() {
     </div>
     ${queueInfo}
     <div id="fr-next-info" style="margin-top:12px;display:none">
-      <div style="font-size:10px;color:#555;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:4px">Up Next</div>
-      <div id="fr-next-title" style="font-size:12px;color:#aaa;line-height:1.4"></div>
+      <div style="font-size:10px;color:#555;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:6px">Up Next</div>
+      <div id="fr-next-title" style="font-size:12px;color:#aaa;line-height:1.4;word-wrap:break-word;overflow-wrap:break-word"></div>
     </div>
     <div style="display:flex;gap:8px;margin-top:16px">
       <button id="fr-back-btn" style="
-        flex:1;padding:9px;background:#1a1a1a;border:1px solid #333;
-        border-radius:8px;color:#888;font-size:12px;cursor:pointer;font-family:'Segoe UI',sans-serif">
+        flex:1;padding:9px 12px;background:#1a1a1a;border:1px solid #333;
+        border-radius:8px;color:#888;font-size:12px;cursor:pointer;font-family:'Segoe UI',sans-serif;
+        white-space:nowrap;overflow:hidden;text-overflow:ellipsis">
         ← Back to Feed
       </button>
       <button id="fr-next-btn" style="
-        flex:1;padding:9px;background:#ff4444;border:none;
-        border-radius:8px;color:#fff;font-size:12px;font-weight:600;cursor:pointer;font-family:'Segoe UI',sans-serif">
+        flex:1;padding:9px 12px;background:#ff4444;border:none;
+        border-radius:8px;color:#fff;font-size:12px;font-weight:600;cursor:pointer;font-family:'Segoe UI',sans-serif;
+        white-space:nowrap;overflow:hidden;text-overflow:ellipsis">
         Next Video →
       </button>
     </div>
@@ -490,15 +596,32 @@ function cleanupShortsObservers() {
 
 function hideDistractingElements() {
   const targets = [
+    "ytd-comments",
+    "#comments",
     "ytd-feed-filter-chip-bar-renderer",
     "ytd-rich-section-renderer ytd-statement-banner-renderer",
     "ytd-rich-section-renderer ytd-banner-promo-renderer",
-    "ytd-horizontal-card-list-renderer",
     "ytd-channel-renderer",
     "ytd-radio-renderer",
     "ytd-compact-radio-renderer",
     "ytd-movie-renderer",
-    "ytd-compact-movie-renderer"
+    "ytd-compact-movie-renderer",
+    'ytd-guide-entry-renderer:has(a[href^="/shorts"])',
+    'ytd-mini-guide-entry-renderer:has(a[href^="/shorts"])',
+    'ytd-guide-entry-renderer:has(a[href^="/feed/subscriptions"])',
+    'ytd-mini-guide-entry-renderer:has(a[href^="/feed/subscriptions"])',
+    
+    // Additional sponsor/ad elements
+    '.ytd-promoted-sparkles-text-search-renderer',
+    '.ytd-ad-slot-renderer',
+    '.ytd-promoted-video-renderer',
+    '.ytd-display-ad-renderer',
+    '.ytd-in-feed-ad-layout-renderer',
+    '.ytp-ad-overlay-container',
+    '.ytp-ad-text',
+    '.ytp-ad-preview-container',
+    '[class*="masthead-ad"]',
+    '[class*="companion-ad"]'
   ];
 
   document.querySelectorAll(targets.join(",")).forEach(el => {
@@ -508,13 +631,26 @@ function hideDistractingElements() {
     }
   });
 
-  document.querySelectorAll("ytd-rich-section-renderer:not([data-fr-banner]):not([data-fr-done])").forEach(section => {
+  document.querySelectorAll("ytd-rich-section-renderer").forEach(section => {
     const heading = (section.querySelector("#title")?.innerText || "").toLowerCase();
+    
+    if (heading.includes("short")) {
+      if (!allowShorts) {
+        section.style.setProperty("display", "none", "important");
+      } else {
+        section.style.removeProperty("display");
+      }
+      return;
+    }
+
+    if (section.dataset.frBanner || section.dataset.frDone) return;
+
     if (
       heading.includes("explore") || heading.includes("topic") ||
       heading.includes("trending") || heading.includes("news") ||
       heading.includes("for you") || heading.includes("recommended channel") ||
-      heading.includes("people also") || heading.includes("short")
+      heading.includes("people also") || heading.includes("sponsored") ||
+      heading.includes("promoted") || heading.includes("advertisement")
     ) {
       section.style.setProperty("display", "none", "important");
       section.dataset.frBanner = "1";
@@ -528,11 +664,11 @@ function extractTitle(el) {
   const selectors = [
     "#video-title", "yt-formatted-string#video-title", "span#video-title",
     "#video-title.ytd-compact-video-renderer",
-    "#title-text", "h3 a#video-title", "h3 span", "a[title]"
+    "#title-text", "h3 a#video-title", "h3 span", "a[title]", "span.ytd-reel-item-renderer"
   ];
   for (const sel of selectors) {
     const node = el.querySelector(sel);
-    const text = (node?.innerText || node?.textContent || node?.getAttribute("title") || "").trim();
+    const text = (node?.innerText || node?.textContent || node?.getAttribute("title") || node?.getAttribute("aria-label") || "").trim();
     if (text && text.length > 1) return text;
   }
   const aria = el.getAttribute("aria-label") || "";
@@ -545,14 +681,14 @@ function extractTitle(el) {
 function trackStat(key) {
   chrome.storage.local.get("analytics", (data) => {
     const a = Object.assign({
-      blockedVideos: 0, shortsBlocked: 0, blockedSearches: 0,
+      blockedVideos: 0, shortsBlocked: 0, blockedSearches: 0, sponsorsBlocked: 0,
       timeSaved: 0, sessionsCompleted: 0, totalFocusMinutes: 0,
       dailyStats: {}, topicsStudied: [], lastUpdated: null
     }, data.analytics || {});
     a[key] = (a[key] || 0) + 1;
     a.timeSaved = Math.round((a.blockedVideos || 0) * 1.5);
     const today = new Date().toISOString().split("T")[0];
-    if (!a.dailyStats[today]) a.dailyStats[today] = { blockedVideos: 0, shortsBlocked: 0, blockedSearches: 0, focusMinutes: 0 };
+    if (!a.dailyStats[today]) a.dailyStats[today] = { blockedVideos: 0, shortsBlocked: 0, blockedSearches: 0, sponsorsBlocked: 0, focusMinutes: 0 };
     if (a.dailyStats[today][key] !== undefined) a.dailyStats[today][key]++;
     a.lastUpdated = Date.now();
     chrome.storage.local.set({ analytics: a });
@@ -648,10 +784,86 @@ function frUpdateStats() {
   });
 }
 
-function frDoSearch() {
+async function frDoSearch() {
   const query = document.getElementById("fr-search-input")?.value?.trim();
   if (!query) return;
+  
+  // Check if search is on-topic before allowing it
+  if (focusProfile) {
+    try {
+      const result = await chrome.runtime.sendMessage({
+        type: "CHECK_SEARCH_RELEVANCE",
+        query: query,
+        topic: focusProfile.topic
+      });
+      
+      if (!result.related) {
+        // Track blocked search
+        chrome.storage.local.get("analytics", (data) => {
+          const a = data.analytics || {};
+          a.blockedSearches = (a.blockedSearches || 0) + 1;
+          const today = new Date().toISOString().split("T")[0];
+          if (!a.dailyStats) a.dailyStats = {};
+          if (!a.dailyStats[today]) a.dailyStats[today] = { blockedVideos: 0, shortsBlocked: 0, blockedSearches: 0, focusMinutes: 0 };
+          a.dailyStats[today].blockedSearches++;
+          a.lastUpdated = Date.now();
+          chrome.storage.local.set({ analytics: a });
+        });
+        
+        // Show warning in rewire mode
+        showRewireSearchWarning(query);
+        return;
+      }
+    } catch (e) {
+      console.warn("Search relevance check failed:", e);
+      // If API fails, allow the search to proceed
+    }
+  }
+  
   window.location.href = `https://www.youtube.com/results?search_query=${encodeURIComponent(query)}`;
+}
+
+function showRewireSearchWarning(query) {
+  // Remove existing warning if any
+  document.getElementById("fr-rewire-warning")?.remove();
+  
+  const warning = document.createElement("div");
+  warning.id = "fr-rewire-warning";
+  warning.style.cssText = `
+    position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
+    background: #111; border: 2px solid #ff4444; border-radius: 12px;
+    padding: 24px; color: #f0f0f0; text-align: center; max-width: 400px;
+    z-index: 10000; font-family: 'Segoe UI', sans-serif;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.6);
+  `;
+  
+  warning.innerHTML = `
+    <div style="font-size: 32px; margin-bottom: 12px;">🚫</div>
+    <h3 style="color: #ff4444; margin: 0 0 8px; font-size: 16px;">Off-Topic Search Blocked</h3>
+    <p style="color: #888; font-size: 13px; margin: 0 0 8px; line-height: 1.4;">
+      <strong style="color: #ccc;">"${query}"</strong><br/>is not related to your focus topic.
+    </p>
+    <p style="color: #555; font-size: 11px; margin: 0 0 20px;">Stay focused on: <span style="color: #ff4444;">${focusProfile?.topic || "your topic"}</span></p>
+    <button id="fr-warning-ok" style="
+      padding: 10px 20px; background: #ff4444; border: none; border-radius: 8px;
+      color: #fff; font-size: 13px; font-weight: 600; cursor: pointer;
+      font-family: 'Segoe UI', sans-serif;
+    ">Got it</button>
+  `;
+  
+  document.body.appendChild(warning);
+  
+  // Clear the search input
+  const searchInput = document.getElementById("fr-search-input");
+  if (searchInput) searchInput.value = "";
+  
+  // Remove warning when OK is clicked
+  document.getElementById("fr-warning-ok").addEventListener("click", () => {
+    warning.remove();
+  });
+  
+  // Auto-remove after 4 seconds
+  setTimeout(() => warning.remove(), 4000);
 }
 
 function deactivateRewireMode() {
@@ -665,7 +877,7 @@ function deactivateRewireMode() {
 
 function blockShortsNavigation() {
   const blockShorts = (e) => {
-    if (!focusProfile) return;
+    if (!focusProfile || allowShorts) return;
     const target = e.target;
     const sidebarLink = target.closest('ytd-guide-entry-renderer a, ytd-mini-guide-entry-renderer a');
     
@@ -688,7 +900,7 @@ function blockShortsNavigation() {
   document.addEventListener('mouseup', blockShorts, true);
   
   setInterval(() => {
-    if (!focusProfile) return;
+    if (!focusProfile || allowShorts) return;
     document.querySelectorAll('ytd-guide-entry-renderer a[href="/shorts"], ytd-mini-guide-entry-renderer a[href="/shorts"]').forEach(link => {
       link.style.pointerEvents = 'none';
       link.style.opacity = '0.5';

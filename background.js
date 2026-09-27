@@ -221,9 +221,10 @@ async function checkSearchRelevance(query, topic) {
   }
 }
 
-// ── ALARM: daily stats rollup ─────────────────────────────────────────────
+// ── ALARM: daily stats rollup + timer management ────────────────────────
 
 chrome.alarms.create("dailyRollup", { periodInMinutes: 60 });
+chrome.alarms.create("timerCheck", { periodInMinutes: 0.1 }); // Check every 6 seconds
 
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === "dailyRollup") {
@@ -235,6 +236,33 @@ chrome.alarms.onAlarm.addListener((alarm) => {
       if (keys.length > 30) {
         keys.slice(0, keys.length - 30).forEach(k => delete a.dailyStats[k]);
         chrome.storage.local.set({ analytics: a });
+      }
+    });
+  }
+  
+  if (alarm.name === "timerCheck") {
+    // Check if timer should complete
+    chrome.storage.local.get(["timerState", "timerStartTime", "timerDuration"], (data) => {
+      if (data.timerState === "running" && data.timerStartTime && data.timerDuration) {
+        const elapsed = Math.floor((Date.now() - data.timerStartTime) / 1000);
+        const timeLeft = data.timerDuration - elapsed;
+        
+        if (timeLeft <= 0) {
+          // Timer completed - track session and clear state
+          chrome.storage.local.get("analytics", (analyticsData) => {
+            const a = analyticsData.analytics || {};
+            a.sessionsCompleted = (a.sessionsCompleted || 0) + 1;
+            a.totalFocusMinutes = (a.totalFocusMinutes || 0) + Math.floor(data.timerDuration / 60);
+            const today = new Date().toISOString().split("T")[0];
+            if (!a.dailyStats) a.dailyStats = {};
+            if (!a.dailyStats[today]) a.dailyStats[today] = { blockedVideos: 0, shortsBlocked: 0, blockedSearches: 0, focusMinutes: 0 };
+            a.dailyStats[today].focusMinutes = (a.dailyStats[today].focusMinutes || 0) + Math.floor(data.timerDuration / 60);
+            chrome.storage.local.set({ analytics: a });
+          });
+          
+          // Clear timer state
+          chrome.storage.local.remove(["timerState", "timerStartTime", "timerDuration"]);
+        }
       }
     });
   }

@@ -187,10 +187,12 @@ function updateWeeklyChart(a) {
         y: {
           stacked: true,
           beginAtZero: true,
+          suggestedMax: 5,
           grid: { color: "rgba(255,255,255,0.05)" },
           ticks: {
             color: "#666",
             font: { size: 10 },
+            stepSize: 1,
             precision: 0
           }
         }

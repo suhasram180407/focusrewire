@@ -5,19 +5,21 @@ let timeLeft = 25 * 60;
 let timerRunning = false;
 let currentMode = "strict";
 let activeProfile = null;
+let timerStartTime = null;
 
 // ── INIT ──────────────────────────────────────────────────────────────────
 
 document.addEventListener("DOMContentLoaded", async () => {
   const data = await chrome.storage.local.get([
-    "activeFocusProfile", "currentMode", "analytics", "rewireMode"
+    "activeFocusProfile", "currentMode", "analytics", "rewireMode", 
+    "timerState", "timerStartTime", "timerDuration"
   ]);
 
   if (data.activeFocusProfile) {
     activeProfile = data.activeFocusProfile;
     document.getElementById("topicInput").value = activeProfile.topic;
     setStatus(`✅ Active: ${activeProfile.topic}`, "green");
-    document.getElementById("deactivateBtn").style.display = "block";
+    toggleSessionUI(true);
   }
 
   if (data.currentMode) setMode(data.currentMode, false);
@@ -28,9 +30,47 @@ document.addEventListener("DOMContentLoaded", async () => {
     document.getElementById("rewireBtn").textContent = "🔁 Rewire: ON";
   }
 
+  // Restore timer state
+  if (data.timerState && data.timerStartTime && data.timerDuration) {
+    const elapsed = Math.floor((Date.now() - data.timerStartTime) / 1000);
+    timeLeft = Math.max(0, data.timerDuration - elapsed);
+    
+    if (data.timerState === "running" && timeLeft > 0) {
+      timerRunning = true;
+      timerStartTime = data.timerStartTime;
+      const tb = document.getElementById("timerBtn");
+      tb.textContent = "⏸ Pause";
+      if (currentMode === "strict") tb.style.opacity = "0.4";
+      document.getElementById("timerDisplay").contentEditable = "false";
+      startTimerInterval();
+    } else if (timeLeft <= 0) {
+      // Timer finished while popup was closed
+      timeLeft = 5 * 60; // 5 min break
+      onSessionComplete();
+    }
+  }
+  
+  updateTimerDisplay();
+
   // Refresh stats every 2s while popup is open
   setInterval(refreshStats, 2000);
 });
+
+function toggleSessionUI(isActive) {
+  const act = document.getElementById("activateBtn");
+  const deact = document.getElementById("deactivateBtn");
+  if (isActive) {
+    act.disabled = true;
+    act.classList.replace("btn-primary", "btn-secondary");
+    deact.disabled = false;
+    deact.classList.replace("btn-secondary", "btn-primary");
+  } else {
+    act.disabled = false;
+    act.classList.replace("btn-secondary", "btn-primary");
+    deact.disabled = true;
+    deact.classList.replace("btn-primary", "btn-secondary");
+  }
+}
 
 // ── ACTIVATE / DEACTIVATE ─────────────────────────────────────────────────
 
@@ -53,7 +93,7 @@ document.getElementById("activateBtn").addEventListener("click", async () => {
     const cached = response.fromCache ? " (cached)" : "";
     const fallback = response.fallback ? " (offline mode)" : "";
     setStatus(`✅ Active: ${topic}${cached}${fallback}`, "green");
-    document.getElementById("deactivateBtn").style.display = "block";
+    toggleSessionUI(true);
 
     // Tell content script to start filtering
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -72,14 +112,41 @@ document.getElementById("deactivateBtn").addEventListener("click", async () => {
   await chrome.storage.local.remove("activeFocusProfile");
   activeProfile = null;
   setStatus("⏸ Session ended.", "dim");
-  document.getElementById("deactivateBtn").style.display = "none";
+  toggleSessionUI(false);
   document.getElementById("topicInput").value = "";
+  
+  // Auto-reset timer when session ends
+  clearInterval(timerInterval);
+  timerRunning = false;
+  timeLeft = 25 * 60;
+  timerStartTime = null;
+  updateTimerDisplay();
+  const tb = document.getElementById("timerBtn");
+  tb.textContent = "▶ Start";
+  tb.style.opacity = "";
+  document.getElementById("timerDisplay").contentEditable = "plaintext-only";
+  
+  // Clear timer state from storage
+  chrome.storage.local.remove(["timerState", "timerStartTime", "timerDuration"]);
 });
 
 // ── MODE TOGGLE ───────────────────────────────────────────────────────────
 
-document.getElementById("strictBtn").addEventListener("click", () => setMode("strict"));
-document.getElementById("casualBtn").addEventListener("click", () => setMode("casual"));
+document.getElementById("strictBtn").addEventListener("click", () => {
+  if (activeProfile || timerRunning) {
+    setStatus("🔒 Cannot change mode during active session!", "red");
+    return;
+  }
+  setMode("strict");
+});
+
+document.getElementById("casualBtn").addEventListener("click", () => {
+  if (activeProfile || timerRunning) {
+    setStatus("🔒 Cannot change mode during active session!", "red");
+    return;
+  }
+  setMode("casual");
+});
 
 function setMode(mode, broadcast = true) {
   currentMode = mode;
@@ -94,10 +161,15 @@ function setMode(mode, broadcast = true) {
   }
 }
 
+
 // ── TIMER ────────────────────────────────────────────────────────────────
 
 document.getElementById("timerBtn").addEventListener("click", () => {
   if (timerRunning) {
+    if (currentMode === "strict") {
+      setStatus("🔒 Cannot pause in Strict Mode!", "red");
+      return;
+    }
     pauseTimer();
   } else {
     startTimer();
@@ -105,24 +177,44 @@ document.getElementById("timerBtn").addEventListener("click", () => {
 });
 
 document.getElementById("resetTimerBtn").addEventListener("click", () => {
-  clearInterval(timerInterval);
-  timerRunning = false;
-  timeLeft = 25 * 60;
-  updateTimerDisplay();
-  document.getElementById("timerBtn").textContent = "▶ Start";
+  resetTimer();
 });
 
 function startTimer() {
   timerRunning = true;
-  document.getElementById("timerBtn").textContent = "⏸ Pause";
+  timerStartTime = Date.now();
+  const tb = document.getElementById("timerBtn");
+  tb.textContent = "⏸ Pause";
+  if (currentMode === "strict") tb.style.opacity = "0.4";
+  
+  document.getElementById("timerDisplay").contentEditable = "false";
+  
+  // Save timer state
+  chrome.storage.local.set({
+    timerState: "running",
+    timerStartTime: timerStartTime,
+    timerDuration: timeLeft
+  });
+  
+  startTimerInterval();
+}
+
+function startTimerInterval() {
   timerInterval = setInterval(() => {
     timeLeft--;
     updateTimerDisplay();
     if (timeLeft <= 0) {
       clearInterval(timerInterval);
       timerRunning = false;
-      document.getElementById("timerBtn").textContent = "▶ Start";
+      const tbtn = document.getElementById("timerBtn");
+      tbtn.textContent = "▶ Start";
+      tbtn.style.opacity = "";
+      document.getElementById("timerDisplay").contentEditable = "plaintext-only";
       timeLeft = 5 * 60; // 5 min break
+      
+      // Clear timer state
+      chrome.storage.local.remove(["timerState", "timerStartTime", "timerDuration"]);
+      
       onSessionComplete();
     }
   }, 1000);
@@ -131,13 +223,72 @@ function startTimer() {
 function pauseTimer() {
   clearInterval(timerInterval);
   timerRunning = false;
-  document.getElementById("timerBtn").textContent = "▶ Resume";
+  const tb = document.getElementById("timerBtn");
+  tb.textContent = "▶ Resume";
+  tb.style.opacity = "";
+  document.getElementById("timerDisplay").contentEditable = "plaintext-only";
+  
+  // Save paused state
+  chrome.storage.local.set({
+    timerState: "paused",
+    timerStartTime: null,
+    timerDuration: timeLeft
+  });
 }
 
 function updateTimerDisplay() {
   const m = Math.floor(timeLeft / 60).toString().padStart(2, "0");
   const s = (timeLeft % 60).toString().padStart(2, "0");
   document.getElementById("timerDisplay").textContent = `${m}:${s}`;
+}
+
+const timerDisplay = document.getElementById("timerDisplay");
+
+timerDisplay.addEventListener("blur", processEdit);
+timerDisplay.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") {
+    e.preventDefault();
+    processEdit();
+  }
+});
+
+function processEdit() {
+  const txt = timerDisplay.textContent.trim();
+  let m = 25, s = 0;
+  if (txt.includes(":")) {
+    const parts = txt.split(":");
+    m = parseInt(parts[0]) || 0;
+    s = parseInt(parts[1]) || 0;
+  } else {
+    m = parseInt(txt) || 0;
+  }
+  
+  if (m >= 0 && s >= 0 && (m > 0 || s > 0)) {
+    timeLeft = m * 60 + s;
+    
+    // Update stored duration if timer is paused
+    if (!timerRunning) {
+      chrome.storage.local.set({
+        timerDuration: timeLeft
+      });
+    }
+  }
+  updateTimerDisplay();
+}
+
+function resetTimer() {
+  clearInterval(timerInterval);
+  timerRunning = false;
+  timeLeft = 25 * 60;
+  timerStartTime = null;
+  updateTimerDisplay();
+  const tb = document.getElementById("timerBtn");
+  tb.textContent = "▶ Start";
+  tb.style.opacity = "";
+  document.getElementById("timerDisplay").contentEditable = "plaintext-only";
+  
+  // Clear timer state from storage
+  chrome.storage.local.remove(["timerState", "timerStartTime", "timerDuration"]);
 }
 
 async function onSessionComplete() {
@@ -181,6 +332,10 @@ document.getElementById("rewireBtn").addEventListener("click", async () => {
 // ── OPEN DASHBOARD ───────────────────────────────────────────────────────
 
 document.getElementById("dashboardBtn").addEventListener("click", () => {
+  chrome.tabs.create({ url: chrome.runtime.getURL("dashboard.html") });
+});
+
+document.getElementById("dashboardBtn2").addEventListener("click", () => {
   chrome.tabs.create({ url: chrome.runtime.getURL("dashboard.html") });
 });
 

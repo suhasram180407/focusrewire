@@ -235,11 +235,6 @@
   <div class="section">
     <div class="section-label">Focus Topic</div>
     <input type="text" id="topicInput" placeholder="e.g. Machine Learning, React, DSA" />
-    <div class="btn-row">
-      <button class="btn btn-primary" id="activateBtn">⚡ Activate</button>
-      <button class="btn btn-secondary" id="deactivateBtn" style="display:none">✕ Stop</button>
-    </div>
-    <div class="status" id="statusMsg">No active session.</div>
   </div>
 
   <!-- MODE -->
@@ -254,11 +249,20 @@
   <!-- TIMER -->
   <div class="section">
     <div class="section-label">Focus Timer</div>
-    <div class="timer-display" id="timerDisplay">25:00</div>
+    <div class="timer-display" id="timerDisplay" title="Click to edit time" contenteditable="plaintext-only" style="cursor: text; outline: none;">25:00</div>
     <div class="btn-row">
       <button class="btn btn-primary" id="timerBtn">▶ Start</button>
       <button class="btn btn-secondary" id="resetTimerBtn">↺ Reset</button>
     </div>
+  </div>
+
+  <!-- SESSION CONTROLS -->
+  <div class="section">
+    <div class="btn-row">
+      <button class="btn btn-primary" id="activateBtn">⚡ Activate Session</button>
+      <button class="btn btn-secondary" id="deactivateBtn" disabled>✕ Stop Session</button>
+    </div>
+    <div class="status" id="statusMsg">No active session.</div>
   </div>
 
   <!-- STATS -->
@@ -291,11 +295,5 @@
   </div>
 
   <script src="popup.js"></script>
-  <script>
-    // Wire second dashboard button
-    document.getElementById("dashboardBtn2").addEventListener("click", () => {
-      chrome.tabs.create({ url: chrome.runtime.getURL("dashboard.html") });
-    });
-  </script>
 </body>
 </html>

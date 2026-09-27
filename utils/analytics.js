@@ -8,10 +8,11 @@ const Analytics = (() => {
     blockedVideos: 0,
     shortsBlocked: 0,
     blockedSearches: 0,
+    sponsorsBlocked: 0,
     timeSaved: 0,
     sessionsCompleted: 0,
     totalFocusMinutes: 0,
-    dailyStats: {},     // { "YYYY-MM-DD": { blockedVideos, shorts, searches, minutes } }
+    dailyStats: {},     // { "YYYY-MM-DD": { blockedVideos, shorts, searches, sponsors, minutes } }
     weeklyStats: [],    // last 7 days summary
     topicsStudied: [],  // list of topics used
     lastUpdated: null
@@ -40,6 +41,7 @@ const Analytics = (() => {
           blockedVideos: 0,
           shortsBlocked: 0,
           blockedSearches: 0,
+          sponsorsBlocked: 0,
           focusMinutes: 0
         };
       }
@@ -61,7 +63,7 @@ const Analytics = (() => {
 
       const today = todayKey();
       if (!a.dailyStats[today]) {
-        a.dailyStats[today] = { blockedVideos: 0, shortsBlocked: 0, blockedSearches: 0, focusMinutes: 0 };
+        a.dailyStats[today] = { blockedVideos: 0, shortsBlocked: 0, blockedSearches: 0, sponsorsBlocked: 0, focusMinutes: 0 };
       }
       a.dailyStats[today].focusMinutes = (a.dailyStats[today].focusMinutes || 0) + durationMinutes;
 
@@ -95,6 +97,7 @@ const Analytics = (() => {
         blockedVideos: stat.blockedVideos || 0,
         shortsBlocked: stat.shortsBlocked || 0,
         blockedSearches: stat.blockedSearches || 0,
+        sponsorsBlocked: stat.sponsorsBlocked || 0,
         focusMinutes: stat.focusMinutes || 0
       });
     }
