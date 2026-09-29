@@ -75,6 +75,18 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
+  if (message.type === "SET_REWIRE_MODE") {
+    chrome.storage.local.set({ rewireMode: message.enabled }, () => {
+      broadcastToYouTubeTabs({
+        type: "SET_REWIRE_MODE",
+        enabled: message.enabled
+      });
+      sendResponse({ success: true, rewireMode: message.enabled });
+    });
+    return true;
+  }
+
+
   if (message.type === "CLEAR_PROFILE") {
     chrome.storage.local.remove("activeFocusProfile", () => sendResponse({ ok: true }));
     return true;

@@ -31,7 +31,10 @@ chrome.storage.local.get(
     if (data.allowShorts !== undefined) allowShorts = data.allowShorts;
     if (data.videoQueue) { videoQueue = data.videoQueue; }
     if (data.videoQueueIndex) { videoQueueIndex = data.videoQueueIndex; }
-    if (data.rewireMode) { rewireMode = true; }
+    if (data.rewireMode) {
+      rewireMode = true;
+      activateRewireMode();
+    }
 
     if (data.sessionActive && data.activeFocusProfile) {
       enableEnforcement(data.activeFocusProfile, currentMode);
@@ -71,11 +74,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message.type === "SET_REWIRE_MODE") {
-    rewireMode = message.enabled;
-    if (sessionActive) {
-      rewireMode ? activateRewireMode() : deactivateRewireMode();
+    rewireMode = Boolean(message.enabled);
+    if (rewireMode) {
+      activateRewireMode();
+    } else {
+      deactivateRewireMode();
     }
-    sendResponse({ ok: true });
+    sendResponse({ ok: true, rewireMode });
     return true;
   }
 
@@ -112,7 +117,11 @@ function enableEnforcement(profile, mode) {
   // Start feed and media filtering
   startFiltering();
 
-  if (rewireMode) activateRewireMode();
+  if (rewireMode) {
+    activateRewireMode();
+    const badge = document.querySelector("#fr-rewire-dashboard .fr-topic-badge");
+    if (badge) badge.textContent = profile.topic || "Active Focus Topic";
+  }
 }
 
 function disableEnforcement() {
@@ -139,8 +148,13 @@ function disableEnforcement() {
     disableSearchGuard();
   }
 
-  // 3. Deactivate Rewire mode if active
-  deactivateRewireMode();
+  // 3. Deactivate Rewire mode only if rewireMode is not enabled
+  if (!rewireMode) {
+    deactivateRewireMode();
+  } else {
+    const badge = document.querySelector("#fr-rewire-dashboard .fr-topic-badge");
+    if (badge) badge.textContent = "No active focus session";
+  }
 
   // 4. Reset decision cache & restore hidden cards
   cardDecisions = new WeakMap();
@@ -198,6 +212,13 @@ function runPageFilter() {
   } else if (path.startsWith("/watch")) {
     applyWatchPageMode();
   } else {
+    if (rewireMode && location.pathname.match(/^\/($|feed\/)/)) {
+      const feed = document.querySelector("ytd-browse");
+      if (feed && feed.style.display !== "none") feed.style.setProperty("display", "none", "important");
+      if (!document.getElementById("fr-rewire-dashboard")) {
+        activateRewireMode();
+      }
+    }
     filterFeedCards();
     collectVideoQueue(); // build the queue from visible on-topic cards
   }
@@ -908,15 +929,23 @@ function trackTopic(topic) {
 function activateRewireMode() {
   if (!location.pathname.match(/^\/($|feed\/)/)) return;
   const feed = document.querySelector("ytd-browse");
-  if (feed) feed.style.display = "none";
-  if (document.getElementById("fr-rewire-dashboard")) return;
+  if (feed) feed.style.setProperty("display", "none", "important");
+
+  const existing = document.getElementById("fr-rewire-dashboard");
+  if (existing) {
+    existing.style.display = "flex";
+    const badge = existing.querySelector(".fr-topic-badge");
+    if (badge) badge.textContent = focusProfile?.topic || "No active focus session";
+    return;
+  }
+
   const panel = document.createElement("div");
   panel.id = "fr-rewire-dashboard";
   panel.innerHTML = `
     <style>
       #fr-rewire-dashboard{position:fixed;top:56px;left:0;right:0;bottom:0;background:#0a0a0a;
-        z-index:9999;display:flex;flex-direction:column;align-items:center;justify-content:center;
-        font-family:'Segoe UI',sans-serif;color:#f0f0f0}
+        z-index:2147483640;display:flex;flex-direction:column;align-items:center;justify-content:center;
+        font-family:'Segoe UI',system-ui,sans-serif;color:#f0f0f0}
       #fr-rewire-dashboard h1{font-size:2.2rem;font-weight:700;color:#ff4444;letter-spacing:-1px;margin-bottom:8px}
       .fr-sub{color:#888;font-size:14px;margin-bottom:32px}
       .fr-topic-badge{background:rgba(255,68,68,0.1);border:1px solid rgba(255,68,68,0.3);
@@ -938,7 +967,7 @@ function activateRewireMode() {
     </style>
     <h1>🎯 FocusRewire</h1>
     <div class="fr-sub">YouTube homepage is hidden. Stay focused.</div>
-    <div class="fr-topic-badge">${focusProfile?.topic || "No topic set"}</div>
+    <div class="fr-topic-badge">${focusProfile?.topic || "No active focus session"}</div>
     <div class="fr-stats">
       <div class="fr-stat-box"><div class="fr-stat-num" id="fr-stat-blocked">0</div><div class="fr-stat-lbl">Blocked Today</div></div>
       <div class="fr-stat-box"><div class="fr-stat-num" id="fr-stat-shorts">0</div><div class="fr-stat-lbl">Shorts Hidden</div></div>
@@ -962,14 +991,18 @@ function activateRewireMode() {
 function frUpdateStats() {
   chrome.storage.local.get("analytics", (data) => {
     const a = data.analytics || {};
-    const today = new Date().toISOString().split("T")[0];
+    const today = (typeof getLocalTodayDate === "function") ? getLocalTodayDate() : new Date().toISOString().split("T")[0];
+    const isCurrentDay = (a.statsDate === today);
     const day = (a.dailyStats || {})[today] || {};
     const b = document.getElementById("fr-stat-blocked");
     const s = document.getElementById("fr-stat-shorts");
     const t = document.getElementById("fr-stat-time");
-    if (b) b.textContent = day.blockedVideos || 0;
-    if (s) s.textContent = day.shortsBlocked || 0;
-    if (t) t.textContent = `${a.timeSaved || 0}m`;
+    const blocked = isCurrentDay && a.todayBlocked !== undefined ? a.todayBlocked : (day.blockedVideos || 0);
+    const shorts = isCurrentDay && a.todayShorts !== undefined ? a.todayShorts : (day.shortsBlocked || 0);
+    const timeSaved = isCurrentDay && a.todayTimeSaved !== undefined ? a.todayTimeSaved : Math.round(blocked * 1.5);
+    if (b) b.textContent = blocked;
+    if (s) s.textContent = shorts;
+    if (t) t.textContent = `${timeSaved}m`;
   });
 }
 
@@ -1148,8 +1181,16 @@ new MutationObserver(() => {
       if (panel) panel.remove();
     }
 
+    // Handle Rewire mode on route change regardless of sessionActive
+    if (rewireMode) {
+      if (p.match(/^\/($|feed\/)/)) {
+        setTimeout(activateRewireMode, 200);
+      } else {
+        deactivateRewireMode();
+      }
+    }
+
     if (sessionActive) {
-      if (rewireMode) { deactivateRewireMode(); setTimeout(activateRewireMode, 500); }
       if (focusProfile) [300, 700, 1400, 2500].forEach(ms => setTimeout(runPageFilter, ms));
     }
   }

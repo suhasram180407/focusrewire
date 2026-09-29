@@ -341,7 +341,10 @@ document.getElementById("rewireBtn").addEventListener("click", async () => {
   btn.classList.toggle("active", newVal);
   btn.textContent = newVal ? "🔁 Rewire: ON" : "🔁 Rewire Mode";
 
-  // Safely inform active YouTube tab if one is open
+  // Broadcast to all YouTube tabs via background service worker
+  await chrome.runtime.sendMessage({ type: "SET_REWIRE_MODE", enabled: newVal }).catch(() => {});
+
+  // Also directly message active tab if on YouTube for instant update
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   if (tab?.id && tab.url && (tab.url.includes("youtube.com") || tab.url.includes("youtu.be"))) {
     chrome.tabs.sendMessage(tab.id, { type: "SET_REWIRE_MODE", enabled: newVal }).catch(() => {});
