@@ -1,13 +1,20 @@
 // content.js — FocusRewire main content script
 
+let sessionActive = false;
 let focusProfile = null;
 let currentMode = "strict";
 let rewireMode = false;
 let mainObserver = null;
 let filterInterval = null;
-let searchGuardActive = false;
 let allowShorts = false;
-const cardDecisions = new WeakMap();
+let shortsGuideInterval = null;
+let _frShortsNavAttached = false;
+let titleObserver = null;
+let lastCheckedTitle = "";
+let shortsFilterInterval = null;
+let watchPageSetup = false;
+let videoEndedListenerAttached = false;
+let cardDecisions = new WeakMap();
 
 // ── VIDEO QUEUE ───────────────────────────────────────────────────────────
 // Stores on-topic video {title, url, videoId} objects collected from feed/search.
@@ -18,63 +25,167 @@ let videoQueueIndex = 0;
 // ── BOOT ──────────────────────────────────────────────────────────────────
 
 chrome.storage.local.get(
-  ["activeFocusProfile", "currentMode", "rewireMode", "videoQueue", "videoQueueIndex", "allowShorts"],
+  ["sessionActive", "activeFocusProfile", "currentMode", "rewireMode", "videoQueue", "videoQueueIndex", "allowShorts"],
   (data) => {
     if (data.currentMode) currentMode = data.currentMode;
     if (data.allowShorts !== undefined) allowShorts = data.allowShorts;
     if (data.videoQueue) { videoQueue = data.videoQueue; }
     if (data.videoQueueIndex) { videoQueueIndex = data.videoQueueIndex; }
-    if (data.activeFocusProfile) {
-      focusProfile = data.activeFocusProfile;
-      startFiltering();
-      if (!searchGuardActive) {
-        initSearchGuard(focusProfile, currentMode);
-        searchGuardActive = true;
-      }
+    if (data.rewireMode) { rewireMode = true; }
+
+    if (data.sessionActive && data.activeFocusProfile) {
+      enableEnforcement(data.activeFocusProfile, currentMode);
+    } else {
+      disableEnforcement();
     }
-    if (data.rewireMode) { rewireMode = true; activateRewireMode(); }
   }
 );
 
 // ── MESSAGES ──────────────────────────────────────────────────────────────
 
-chrome.runtime.onMessage.addListener((message) => {
-  if (message.type === "START_FILTERING") {
-    focusProfile = message.profile;
-    videoQueue = [];
-    videoQueueIndex = 0;
-    startFiltering();
-    if (!searchGuardActive) {
-      initSearchGuard(focusProfile, currentMode);
-      searchGuardActive = true;
-    }
-    trackTopic(message.profile.topic);
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message.type === "SESSION_STARTED" || message.type === "START_FILTERING") {
+    const profile = message.profile || focusProfile;
+    const mode = message.mode || currentMode;
+    enableEnforcement(profile, mode);
+    sendResponse({ ok: true, sessionActive: true });
+    return true;
   }
-  if (message.type === "SET_MODE") { currentMode = message.mode; _sgMode = message.mode; }
+
+  if (message.type === "SESSION_STOPPED" || message.type === "STOP_FILTERING") {
+    disableEnforcement();
+    sendResponse({ ok: true, sessionActive: false });
+    return true;
+  }
+
+  if (message.type === "SET_MODE") {
+    currentMode = message.mode;
+    if (typeof updateSearchGuardMode === "function") {
+      updateSearchGuardMode(message.mode);
+    }
+    if (sessionActive && focusProfile) {
+      runPageFilter();
+    }
+    sendResponse({ ok: true });
+    return true;
+  }
+
   if (message.type === "SET_REWIRE_MODE") {
     rewireMode = message.enabled;
-    rewireMode ? activateRewireMode() : deactivateRewireMode();
+    if (sessionActive) {
+      rewireMode ? activateRewireMode() : deactivateRewireMode();
+    }
+    sendResponse({ ok: true });
+    return true;
   }
+
   if (message.type === "SET_ALLOW_SHORTS") {
     allowShorts = message.allowShorts;
-    if (focusProfile) runPageFilter();
+    if (sessionActive && focusProfile) runPageFilter();
+    sendResponse({ ok: true });
+    return true;
   }
+
+  // Fallback response for unhandled message types to prevent hung channels
+  sendResponse({ ok: false, error: "Unhandled message type in content script" });
+  return false;
 });
+
+// ── ENFORCEMENT CONTROLLER ────────────────────────────────────────────────
+
+function enableEnforcement(profile, mode) {
+  if (!profile) return;
+  sessionActive = true;
+  focusProfile = profile;
+  if (mode) currentMode = mode;
+  cardDecisions = new WeakMap();
+  videoQueue = [];
+  videoQueueIndex = 0;
+
+  trackTopic(profile.topic);
+
+  // Enable Search Guard dynamically
+  if (typeof enableSearchGuard === "function") {
+    enableSearchGuard(profile, currentMode);
+  }
+
+  // Start feed and media filtering
+  startFiltering();
+
+  if (rewireMode) activateRewireMode();
+}
+
+function disableEnforcement() {
+  sessionActive = false;
+  focusProfile = null;
+
+  // 1. Disconnect observers and clear intervals
+  if (mainObserver) {
+    mainObserver.disconnect();
+    mainObserver = null;
+  }
+  if (filterInterval) {
+    clearInterval(filterInterval);
+    filterInterval = null;
+  }
+  if (shortsGuideInterval) {
+    clearInterval(shortsGuideInterval);
+    shortsGuideInterval = null;
+  }
+  cleanupShortsObservers();
+
+  // 2. Disable Search Guard
+  if (typeof disableSearchGuard === "function") {
+    disableSearchGuard();
+  }
+
+  // 3. Deactivate Rewire mode if active
+  deactivateRewireMode();
+
+  // 4. Reset decision cache & restore hidden cards
+  cardDecisions = new WeakMap();
+  restoreHiddenCards();
+
+  // 5. Restore distracting elements
+  restoreDistractingElements();
+
+  // 6. Restore watch page sidebar and remove custom panel
+  restoreWatchPage();
+
+  // 7. Remove any active on-screen alerts
+  document.getElementById("fr-block-msg")?.remove();
+  document.getElementById("fr-block-banner")?.remove();
+  document.getElementById("fr-warning-modal")?.remove();
+  document.getElementById("fr-rewire-warning")?.remove();
+
+  // 8. Re-enable guide shorts links
+  document.querySelectorAll('ytd-guide-entry-renderer a[href="/shorts"], ytd-mini-guide-entry-renderer a[href="/shorts"]').forEach(link => {
+    link.style.pointerEvents = "";
+    link.style.opacity = "";
+  });
+}
 
 // ── CORE ENGINE ───────────────────────────────────────────────────────────
 
 function startFiltering() {
-  [0, 300, 700, 1200, 2000, 3500].forEach(ms => setTimeout(runPageFilter, ms));
+  if (!sessionActive || !focusProfile) return;
+  [0, 200, 500, 1000, 1800, 3000].forEach(ms => setTimeout(() => {
+    if (sessionActive && focusProfile) runPageFilter();
+  }, ms));
   if (filterInterval) clearInterval(filterInterval);
-  filterInterval = setInterval(runPageFilter, 700);
+  filterInterval = setInterval(() => {
+    if (sessionActive && focusProfile) runPageFilter();
+  }, 700);
   if (mainObserver) mainObserver.disconnect();
-  mainObserver = new MutationObserver(runPageFilter);
+  mainObserver = new MutationObserver(() => {
+    if (sessionActive && focusProfile) runPageFilter();
+  });
   mainObserver.observe(document.body, { childList: true, subtree: true });
   blockShortsNavigation();
 }
 
 function runPageFilter() {
-  if (!focusProfile) return;
+  if (!sessionActive || !focusProfile) return;
   const path = location.pathname;
   hideDistractingElements();
 
@@ -98,12 +209,21 @@ function runPageFilter() {
 // ─────────────────────────────────────────────────────────────────────────
 
 function filterFeedCards() {
-  document.querySelectorAll([
+  if (location.pathname.startsWith("/results") && typeof isOffTopicSearchAllowed === "function" && isOffTopicSearchAllowed()) {
+    // User is in active Casual Mode off-topic search allowance
+    return;
+  }
+
+  const cardSelectors = [
     "ytd-rich-item-renderer",
     "ytd-video-renderer",
     "ytd-grid-video-renderer",
-    "ytd-reel-item-renderer"
-  ].join(",")).forEach(card => {
+    "ytd-compact-video-renderer",
+    "ytd-reel-item-renderer",
+    "yt-lockup-view-model"
+  ].join(",");
+
+  document.querySelectorAll(cardSelectors).forEach(card => {
     // Check for sponsored content first
     if (isSponsoredContent(card)) {
       killCard(card, "sponsor");
@@ -111,7 +231,9 @@ function filterFeedCards() {
     }
     
     // Block Shorts overlay cards unless conditionally allowed
-    const isShort = card.tagName.toLowerCase() === "ytd-reel-item-renderer" || card.querySelector("[overlay-style='SHORTS']") !== null;
+    const isShort = card.tagName.toLowerCase() === "ytd-reel-item-renderer" || 
+                    card.querySelector("[overlay-style='SHORTS']") !== null ||
+                    (card.querySelector("a[href*='/shorts/']") !== null && !card.querySelector("a[href*='/watch']"));
     if (isShort) {
       if (!allowShorts) {
         killCard(card, "short");
@@ -213,18 +335,20 @@ function isSponsoredContent(card) {
   return false;
 }
 
-// Collect all currently visible on-topic video links from the feed
 function collectVideoQueue() {
   const newQueue = [];
-  document.querySelectorAll([
-    "ytd-rich-item-renderer a#thumbnail[href]",
-    "ytd-video-renderer a#thumbnail[href]",
-    "ytd-grid-video-renderer a#thumbnail[href]"
-  ].join(",")).forEach(link => {
-    const card = link.closest(
-      "ytd-rich-item-renderer, ytd-video-renderer, ytd-grid-video-renderer"
-    );
-    if (!card || card.style.display === "none") return;
+  const cardSelectors = [
+    "ytd-rich-item-renderer",
+    "ytd-video-renderer",
+    "ytd-grid-video-renderer",
+    "ytd-compact-video-renderer",
+    "yt-lockup-view-model"
+  ].join(",");
+
+  document.querySelectorAll(cardSelectors).forEach(card => {
+    if (card.style.display === "none") return;
+    const link = card.querySelector("a#thumbnail[href], a.yt-lockup-view-model__link[href], a[href*='/watch']");
+    if (!link) return;
 
     const href = link.getAttribute("href") || "";
     if (!href.includes("/watch")) return;
@@ -248,12 +372,20 @@ function collectVideoQueue() {
 
 function killCard(card, type, title = "") {
   card.style.setProperty("display", "none", "important");
+  card.dataset.frKilled = "1";
   if (!card.dataset.frTracked) {
     card.dataset.frTracked = "1";
     if (type === "short") trackStat("shortsBlocked");
     else if (type === "sponsor") trackStat("sponsorsBlocked");
     else { trackStat("blockedVideos"); if (title) logEvent("video", title); }
   }
+}
+
+function restoreHiddenCards() {
+  document.querySelectorAll("[data-fr-killed]").forEach(card => {
+    card.style.removeProperty("display");
+    delete card.dataset.frKilled;
+  });
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -263,9 +395,6 @@ function killCard(card, type, title = "") {
 // Inject a minimal "Now Watching" panel in the sidebar space.
 // When video ends → play next from queue.
 // ─────────────────────────────────────────────────────────────────────────
-
-let watchPageSetup = false;
-let videoEndedListenerAttached = false;
 
 function applyWatchPageMode() {
   // Hide the entire sidebar — no recommendations, no autoplay cards
@@ -295,7 +424,31 @@ function hideSidebar() {
   ];
   sidebarSelectors.forEach(sel => {
     const el = document.querySelector(sel);
-    if (el) el.style.setProperty("display", "none", "important");
+    if (el) {
+      el.style.setProperty("display", "none", "important");
+      el.dataset.frSidebarHidden = "1";
+    }
+  });
+}
+
+function restoreWatchPage() {
+  const panel = document.getElementById("fr-watch-panel");
+  if (panel) panel.remove();
+  watchPageSetup = false;
+  videoEndedListenerAttached = false;
+
+  const sidebarSelectors = [
+    "#secondary",
+    "#secondary-inner",
+    "ytd-watch-next-secondary-results-renderer",
+    "#related",
+    "ytd-compact-autoplay-renderer"
+  ];
+  sidebarSelectors.forEach(sel => {
+    document.querySelectorAll(sel).forEach(el => {
+      el.style.removeProperty("display");
+      delete el.dataset.frSidebarHidden;
+    });
   });
 }
 
@@ -452,10 +605,6 @@ function playNextFromQueue() {
 // when navigating to a new short). Extract title from there — it's the
 // most reliable source. Remove() off-topic reel elements entirely from DOM.
 // ─────────────────────────────────────────────────────────────────────────
-
-let titleObserver = null;
-let lastCheckedTitle = "";
-let shortsFilterInterval = null;
 
 function filterShortsPage() {
   if (!focusProfile) return;
@@ -658,12 +807,26 @@ function hideDistractingElements() {
   });
 }
 
-// ── TITLE EXTRACTION ──────────────────────────────────────────────────────
+function restoreDistractingElements() {
+  document.querySelectorAll("[data-fr-banner]").forEach(el => {
+    el.style.removeProperty("display");
+    delete el.dataset.frBanner;
+  });
+  document.querySelectorAll("ytd-rich-section-renderer").forEach(section => {
+    section.style.removeProperty("display");
+    delete section.dataset.frBanner;
+    delete section.dataset.frDone;
+  });
+}
 
 function extractTitle(el) {
   const selectors = [
     "#video-title", "yt-formatted-string#video-title", "span#video-title",
     "#video-title.ytd-compact-video-renderer",
+    ".yt-lockup-metadata-view-model__title",
+    ".yt-lockup-view-model__title",
+    "h3.yt-lockup-metadata-view-model__heading",
+    "[role='heading']",
     "#title-text", "h3 a#video-title", "h3 span", "a[title]", "span.ytd-reel-item-renderer"
   ];
   for (const sel of selectors) {
@@ -678,16 +841,42 @@ function extractTitle(el) {
 
 // ── ANALYTICS ─────────────────────────────────────────────────────────────
 
+function getLocalTodayDate() {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, "0");
+  const day = String(now.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
 function trackStat(key) {
   chrome.storage.local.get("analytics", (data) => {
     const a = Object.assign({
       blockedVideos: 0, shortsBlocked: 0, blockedSearches: 0, sponsorsBlocked: 0,
       timeSaved: 0, sessionsCompleted: 0, totalFocusMinutes: 0,
+      statsDate: null, todayBlocked: 0, todayShorts: 0, todayTimeSaved: 0,
       dailyStats: {}, topicsStudied: [], lastUpdated: null
     }, data.analytics || {});
+
+    const today = getLocalTodayDate();
+    if (a.statsDate !== today) {
+      a.statsDate = today;
+      a.todayBlocked = 0;
+      a.todayShorts = 0;
+      a.todayTimeSaved = 0;
+    }
+
     a[key] = (a[key] || 0) + 1;
     a.timeSaved = Math.round((a.blockedVideos || 0) * 1.5);
-    const today = new Date().toISOString().split("T")[0];
+
+    if (key === "blockedVideos") {
+      a.todayBlocked = (a.todayBlocked || 0) + 1;
+      a.todayTimeSaved = Math.round(a.todayBlocked * 1.5);
+    } else if (key === "shortsBlocked") {
+      a.todayShorts = (a.todayShorts || 0) + 1;
+    }
+
+    if (!a.dailyStats) a.dailyStats = {};
     if (!a.dailyStats[today]) a.dailyStats[today] = { blockedVideos: 0, shortsBlocked: 0, blockedSearches: 0, sponsorsBlocked: 0, focusMinutes: 0 };
     if (a.dailyStats[today][key] !== undefined) a.dailyStats[today][key]++;
     a.lastUpdated = Date.now();
@@ -873,13 +1062,24 @@ function deactivateRewireMode() {
   if (feed) feed.style.display = "";
 }
 
+function restoreDistractingElements() {
+  document.querySelectorAll("[data-fr-banner]").forEach(el => {
+    el.style.removeProperty("display");
+    delete el.dataset.frBanner;
+  });
+  document.querySelectorAll("ytd-guide-entry-renderer a[href='/shorts'], ytd-mini-guide-entry-renderer a[href='/shorts']").forEach(link => {
+    link.style.pointerEvents = "";
+    link.style.opacity = "";
+  });
+}
+
 // ── SPA NAVIGATION ────────────────────────────────────────────────────────
 
 function blockShortsNavigation() {
   const blockShorts = (e) => {
-    if (!focusProfile || allowShorts) return;
+    if (!sessionActive || !focusProfile || allowShorts) return;
     const target = e.target;
-    const sidebarLink = target.closest('ytd-guide-entry-renderer a, ytd-mini-guide-entry-renderer a');
+    const sidebarLink = target?.closest ? target.closest('ytd-guide-entry-renderer a, ytd-mini-guide-entry-renderer a') : null;
     
     if (sidebarLink) {
       const href = sidebarLink.getAttribute('href');
@@ -895,12 +1095,16 @@ function blockShortsNavigation() {
     }
   };
   
-  document.addEventListener('click', blockShorts, true);
-  document.addEventListener('mousedown', blockShorts, true);
-  document.addEventListener('mouseup', blockShorts, true);
+  if (!_frShortsNavAttached) {
+    _frShortsNavAttached = true;
+    document.addEventListener('click', blockShorts, true);
+    document.addEventListener('mousedown', blockShorts, true);
+    document.addEventListener('mouseup', blockShorts, true);
+  }
   
-  setInterval(() => {
-    if (!focusProfile || allowShorts) return;
+  if (shortsGuideInterval) clearInterval(shortsGuideInterval);
+  shortsGuideInterval = setInterval(() => {
+    if (!sessionActive || !focusProfile || allowShorts) return;
     document.querySelectorAll('ytd-guide-entry-renderer a[href="/shorts"], ytd-mini-guide-entry-renderer a[href="/shorts"]').forEach(link => {
       link.style.pointerEvents = 'none';
       link.style.opacity = '0.5';
@@ -919,7 +1123,7 @@ function showBlockMessage() {
     z-index: 10000; box-shadow: 0 4px 12px rgba(0,0,0,0.3);
     font-family: 'Segoe UI', sans-serif;
   `;
-  msg.textContent = 'Shorts are blocked while IntentFeed is running';
+  msg.textContent = 'Shorts are blocked while FocusRewire is running';
   document.body.appendChild(msg);
   setTimeout(() => msg.remove(), 3000);
 }
@@ -944,7 +1148,18 @@ new MutationObserver(() => {
       if (panel) panel.remove();
     }
 
-    if (rewireMode) { deactivateRewireMode(); setTimeout(activateRewireMode, 500); }
-    if (focusProfile) [300, 700, 1400, 2500].forEach(ms => setTimeout(runPageFilter, ms));
+    if (sessionActive) {
+      if (rewireMode) { deactivateRewireMode(); setTimeout(activateRewireMode, 500); }
+      if (focusProfile) [300, 700, 1400, 2500].forEach(ms => setTimeout(runPageFilter, ms));
+    }
   }
 }).observe(document.body, { childList: true, subtree: true });
+
+// ── EXPORTS FOR INSPECTION / TESTING ──────────────────────────────────────
+if (typeof window !== "undefined") {
+  window.isFocusRewireSessionActive = () => sessionActive;
+  window.getFocusProfile = () => focusProfile;
+  window.enableEnforcement = enableEnforcement;
+  window.disableEnforcement = disableEnforcement;
+}
+

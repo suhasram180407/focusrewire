@@ -28,6 +28,7 @@
 
     html {
       background: var(--bg);
+      overflow-x: hidden;
     }
 
     body {
@@ -35,8 +36,12 @@
       background: var(--bg);
       color: var(--text);
       min-height: 100vh;
-      max-width: 960px;
-      margin: 0 auto;
+      width: 100%;
+      min-width: 0;
+      margin: 0;
+      padding: 0;
+      overflow-x: hidden;
+      box-sizing: border-box;
     }
 
     /* ── HEADER ── */
@@ -44,9 +49,12 @@
       display: flex;
       align-items: center;
       justify-content: space-between;
-      padding: 20px 28px;
+      padding: 20px 32px;
       border-bottom: 1px solid var(--border);
       background: var(--surface);
+      width: 100%;
+      min-width: 0;
+      box-sizing: border-box;
     }
 
     .logo {
@@ -122,10 +130,13 @@
     .session-banner {
       background: linear-gradient(135deg, var(--red-glow), transparent);
       border-bottom: 1px solid rgba(255, 68, 68, 0.2);
-      padding: 12px 28px;
+      padding: 12px 32px;
       display: flex;
       align-items: center;
       justify-content: space-between;
+      width: 100%;
+      min-width: 0;
+      box-sizing: border-box;
     }
 
     .session-info {
@@ -167,9 +178,12 @@
 
     /* ── LAYOUT ── */
     .main {
-      padding: 24px 28px;
+      padding: 24px 32px;
       display: grid;
       gap: 20px;
+      width: 100%;
+      min-width: 0;
+      box-sizing: border-box;
     }
 
     /* ── STAT CARDS ROW ── */
@@ -466,7 +480,7 @@
 
     /* ── FOOTER ── */
     .footer {
-      padding: 16px 28px;
+      padding: 16px 32px;
       border-top: 1px solid var(--border);
       display: flex;
       align-items: center;
@@ -474,6 +488,34 @@
       font-size: 11px;
       color: var(--text-faint);
       font-family: 'Space Mono', monospace;
+      width: 100%;
+      min-width: 0;
+      box-sizing: border-box;
+    }
+
+    /* ── RESPONSIVE DESKTOP & MOBILE ── */
+    @media (max-width: 900px) {
+      .header, .session-banner, .main, .footer {
+        padding-left: 20px;
+        padding-right: 20px;
+      }
+      .stats-row {
+        grid-template-columns: repeat(2, 1fr);
+      }
+      .two-col {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    @media (max-width: 600px) {
+      .header {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 12px;
+      }
+      .stats-row {
+        grid-template-columns: 1fr;
+      }
     }
   </style>
 </head>

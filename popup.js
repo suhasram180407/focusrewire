@@ -11,15 +11,18 @@ let timerStartTime = null;
 
 document.addEventListener("DOMContentLoaded", async () => {
   const data = await chrome.storage.local.get([
-    "activeFocusProfile", "currentMode", "analytics", "rewireMode", 
+    "sessionActive", "activeFocusProfile", "currentMode", "analytics", "rewireMode", 
     "timerState", "timerStartTime", "timerDuration"
   ]);
 
-  if (data.activeFocusProfile) {
+  if (data.sessionActive && data.activeFocusProfile) {
     activeProfile = data.activeFocusProfile;
     document.getElementById("topicInput").value = activeProfile.topic;
     setStatus(`✅ Active: ${activeProfile.topic}`, "green");
     toggleSessionUI(true);
+  } else {
+    activeProfile = null;
+    toggleSessionUI(false);
   }
 
   if (data.currentMode) setMode(data.currentMode, false);
@@ -81,10 +84,19 @@ document.getElementById("activateBtn").addEventListener("click", async () => {
   setStatus("⏳ Generating AI keywords...", "dim");
   document.getElementById("activateBtn").disabled = true;
 
-  const response = await chrome.runtime.sendMessage({
-    type: "GENERATE_KEYWORDS",
-    topic
-  });
+  // Invalidate cache if the topic changed from current active session
+  const topicChanged = !activeProfile || activeProfile.topic?.toLowerCase().trim() !== topic.toLowerCase().trim();
+
+  let response = null;
+  try {
+    response = await chrome.runtime.sendMessage({
+      type: "GENERATE_KEYWORDS",
+      topic,
+      forceRefresh: topicChanged
+    });
+  } catch (err) {
+    console.warn("Error contacting background worker:", err);
+  }
 
   document.getElementById("activateBtn").disabled = false;
 
@@ -95,21 +107,29 @@ document.getElementById("activateBtn").addEventListener("click", async () => {
     setStatus(`✅ Active: ${topic}${cached}${fallback}`, "green");
     toggleSessionUI(true);
 
-    // Tell content script to start filtering
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (tab?.id) {
-      chrome.tabs.sendMessage(tab.id, {
-        type: "START_FILTERING",
-        profile: response.profile
-      });
-    }
+    // Notify background to start session, persist state, and broadcast to all YouTube tabs
+    await chrome.runtime.sendMessage({
+      type: "START_SESSION",
+      profile: response.profile,
+      mode: currentMode
+    }).catch(() => {});
   } else {
-    setStatus("❌ Error generating keywords. Check API key.", "red");
+    if (response?.quotaExceeded || response?.error?.code === "RATE_LIMITED" || response?.error?.code === "QUOTA_EXCEEDED") {
+      const err = response.error || {};
+      showPopupQuotaModal(err.provider, err.model, err.message);
+      setStatus("⚠️ Free AI limit reached.", "red");
+    } else {
+      setStatus("❌ Error generating keywords. Check AI Settings.", "red");
+    }
   }
 });
 
 document.getElementById("deactivateBtn").addEventListener("click", async () => {
-  await chrome.storage.local.remove("activeFocusProfile");
+  // Notify background to stop session, persist state, and broadcast to all YouTube tabs
+  await chrome.runtime.sendMessage({
+    type: "STOP_SESSION"
+  }).catch(() => {});
+
   activeProfile = null;
   setStatus("⏸ Session ended.", "dim");
   toggleSessionUI(false);
@@ -155,9 +175,7 @@ function setMode(mode, broadcast = true) {
   document.getElementById("casualBtn").classList.toggle("active", mode === "casual");
 
   if (broadcast) {
-    chrome.tabs.query({ active: true, currentWindow: true }, ([tab]) => {
-      if (tab?.id) chrome.tabs.sendMessage(tab.id, { type: "SET_MODE", mode });
-    });
+    chrome.runtime.sendMessage({ type: "SET_MODE", mode }).catch(() => {});
   }
 }
 
@@ -297,7 +315,7 @@ async function onSessionComplete() {
     const a = data.analytics || {};
     a.sessionsCompleted = (a.sessionsCompleted || 0) + 1;
     a.totalFocusMinutes = (a.totalFocusMinutes || 0) + 25;
-    const today = new Date().toISOString().split("T")[0];
+    const today = getLocalTodayDate();
     if (!a.dailyStats) a.dailyStats = {};
     if (!a.dailyStats[today]) a.dailyStats[today] = { blockedVideos: 0, shortsBlocked: 0, blockedSearches: 0, focusMinutes: 0 };
     a.dailyStats[today].focusMinutes = (a.dailyStats[today].focusMinutes || 0) + 25;
@@ -323,13 +341,18 @@ document.getElementById("rewireBtn").addEventListener("click", async () => {
   btn.classList.toggle("active", newVal);
   btn.textContent = newVal ? "🔁 Rewire: ON" : "🔁 Rewire Mode";
 
+  // Safely inform active YouTube tab if one is open
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  if (tab?.id) {
-    chrome.tabs.sendMessage(tab.id, { type: "SET_REWIRE_MODE", enabled: newVal });
+  if (tab?.id && tab.url && (tab.url.includes("youtube.com") || tab.url.includes("youtu.be"))) {
+    chrome.tabs.sendMessage(tab.id, { type: "SET_REWIRE_MODE", enabled: newVal }).catch(() => {});
   }
 });
 
-// ── OPEN DASHBOARD ───────────────────────────────────────────────────────
+// ── OPEN SETTINGS / DASHBOARD ─────────────────────────────────────────────
+
+document.getElementById("settingsBtn")?.addEventListener("click", () => {
+  chrome.tabs.create({ url: chrome.runtime.getURL("settings.html") });
+});
 
 document.getElementById("dashboardBtn").addEventListener("click", () => {
   chrome.tabs.create({ url: chrome.runtime.getURL("dashboard.html") });
@@ -341,15 +364,32 @@ document.getElementById("dashboardBtn2").addEventListener("click", () => {
 
 // ── STATS REFRESH ────────────────────────────────────────────────────────
 
+function getLocalTodayDate() {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, "0");
+  const day = String(now.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
 async function refreshStats() {
   const data = await chrome.storage.local.get("analytics");
   if (data.analytics) updateStatsUI(data.analytics);
 }
 
 function updateStatsUI(a) {
-  document.getElementById("blockedCount").textContent = a.blockedVideos || 0;
-  document.getElementById("shortsCount").textContent = a.shortsBlocked || 0;
-  document.getElementById("timeSaved").textContent = `${a.timeSaved || 0}m`;
+  if (!a) return;
+  const today = getLocalTodayDate();
+  const isCurrentDay = (a.statsDate === today);
+  const todayStats = (a.dailyStats && a.dailyStats[today]) || {};
+
+  const blocked = isCurrentDay && a.todayBlocked !== undefined ? a.todayBlocked : (todayStats.blockedVideos || 0);
+  const shorts = isCurrentDay && a.todayShorts !== undefined ? a.todayShorts : (todayStats.shortsBlocked || 0);
+  const timeSaved = isCurrentDay && a.todayTimeSaved !== undefined ? a.todayTimeSaved : Math.round(blocked * 1.5);
+
+  document.getElementById("blockedCount").textContent = blocked;
+  document.getElementById("shortsCount").textContent = shorts;
+  document.getElementById("timeSaved").textContent = `${timeSaved}m`;
 }
 
 // ── HELPERS ──────────────────────────────────────────────────────────────
@@ -360,3 +400,52 @@ function setStatus(msg, type = "dim") {
   el.style.color = type === "green" ? "#4ade80" :
                    type === "red"   ? "#ff4444" : "#888";
 }
+
+// ── QUOTA MODAL CONTROLS ───────────────────────────────────────────────────
+
+function showPopupQuotaModal(provider, model, message) {
+  const modal = document.getElementById("popupQuotaModal");
+  const desc = document.getElementById("popupQuotaDesc");
+  if (provider || model) {
+    desc.innerHTML = `The free tier usage limit for <strong>${provider || "your provider"}</strong> ${model ? `(<code>${model}</code>)` : ""} has been reached.`;
+  }
+  modal.style.display = "flex";
+}
+
+document.getElementById("popupOpenSettingsBtn")?.addEventListener("click", () => {
+  document.getElementById("popupQuotaModal").style.display = "none";
+  chrome.tabs.create({ url: chrome.runtime.getURL("settings.html") });
+});
+
+document.getElementById("popupUseOfflineBtn")?.addEventListener("click", async () => {
+  document.getElementById("popupQuotaModal").style.display = "none";
+  const topic = document.getElementById("topicInput").value.trim();
+  if (!topic) return;
+
+  // Generate fallback keywords offline
+  setStatus("⏳ Activating offline built-in engine...", "dim");
+  const fallback = {
+    topic,
+    positive_keywords: [topic, `${topic} tutorial`, `${topic} guide`, `${topic} course`, `${topic} projects`],
+    negative_keywords: ["funny", "prank", "vlog", "challenge", "reaction", "gaming", "shorts"],
+    subtopics: [`${topic} basics`, `${topic} advanced`],
+    threshold: 0.0,
+    generated_at: Date.now(),
+    isFallback: true
+  };
+
+  await chrome.storage.local.set({
+    [`kw_${topic}`]: fallback,
+    activeFocusProfile: fallback
+  });
+
+  activeProfile = fallback;
+  setStatus(`✅ Active: ${topic} (offline fallback)`, "green");
+  toggleSessionUI(true);
+
+  await chrome.runtime.sendMessage({
+    type: "START_SESSION",
+    profile: fallback,
+    mode: currentMode
+  }).catch(() => {});
+});

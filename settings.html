@@ -1,0 +1,541 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>FocusRewire Settings</title>
+  <link rel="stylesheet" href="settings.css" />
+</head>
+<body>
+
+  <!-- TOP NAVIGATION -->
+  <div class="top-nav">
+    <a href="#" id="backBtn" class="nav-back" aria-label="Back to FocusRewire">← Back to FocusRewire</a>
+  </div>
+
+  <!-- HEADER -->
+  <header class="header">
+    <div>
+      <div class="logo-group">
+        <div class="logo-icon">🎯</div>
+        <div class="logo-text">Focus<span>Rewire</span></div>
+        <span class="badge-tag">Settings</span>
+      </div>
+      <div class="header-subtitle">Configure how FocusRewire uses AI.</div>
+    </div>
+  </header>
+
+  <!-- MAIN LAYOUT -->
+  <main class="layout-container">
+
+    <!-- SETTINGS CONTENT -->
+    <section class="card" aria-labelledby="aiIntegrationHeading">
+
+      <div class="card-header">
+        <h1 class="card-title" id="aiIntegrationHeading">⚡ AI INTEGRATION</h1>
+        <p class="card-description">
+          Choose how FocusRewire processes AI-powered keyword generation and search relevance. FocusRewire operates on a strict <strong>Free-Only AI policy</strong>.
+        </p>
+      </div>
+
+      <!-- PROVIDER SELECTOR -->
+      <div class="form-group">
+        <label for="providerSelect" class="form-label">AI Provider</label>
+        <select id="providerSelect" class="form-select">
+          <option value="offline">Offline / Built-in ($0 cost, no network required)</option>
+          <option value="openrouter">OpenRouter (Free Models Only)</option>
+          <option value="gemini">Google Gemini (Free Tier)</option>
+          <option value="groq">Groq (Free Plan)</option>
+          <option value="mistral">Mistral AI (Free Mode)</option>
+          <option value="ollama">Ollama (Local / Free)</option>
+        </select>
+        <div class="field-hint">Select whether to use cloud AI, locally hosted models, or built-in rules. Only $0 inference models are available.</div>
+      </div>
+
+      <!-- 1. OPENROUTER CONFIG PANEL -->
+      <div id="openrouterPanel" class="provider-panel" aria-label="OpenRouter Configuration">
+        <div class="panel-header-title">OpenRouter Configuration</div>
+
+        <!-- API KEY -->
+        <div class="form-group">
+          <label for="openrouterKey" class="form-label">API Key</label>
+          <div class="input-with-button">
+            <input
+              type="password"
+              id="openrouterKey"
+              class="form-input"
+              placeholder="sk-or-v1-..."
+              autocomplete="off"
+              spellcheck="false"
+              aria-label="OpenRouter API Key"
+            />
+            <button type="button" id="toggleOpenrouterKeyBtn" class="btn btn-ghost" aria-label="Show or hide API key">Show</button>
+            <button type="button" id="fetchOpenrouterModelsBtn" class="btn btn-primary">
+              ⚡ Fetch Models
+            </button>
+          </div>
+          <div class="field-hint">Enter your personal OpenRouter API key. Only models with $0 inference cost are discovered. Stored locally in your browser only.</div>
+          <div id="openrouterKeyError" class="field-error" style="display: none;"></div>
+        </div>
+
+        <!-- DYNAMIC MODELS AREA -->
+        <div id="openrouterModelsArea" class="models-discovery-area">
+          <div class="form-label">Available Free Models</div>
+
+          <div id="openrouterEmptyNotice" class="models-empty-state">
+            <span class="empty-icon">🔍</span>
+            <div>No models loaded yet.</div>
+            <div class="empty-sub">Enter your API key above and click <strong>Fetch Models</strong> to dynamically discover free models from OpenRouter.</div>
+          </div>
+
+          <div id="openrouterLoadedContainer" style="display: none;">
+            <!-- SEARCH AND TOOLBAR -->
+            <div class="models-toolbar">
+              <div class="toolbar-controls">
+                <div class="free-only-badge">
+                  <span class="free-dot"></span>
+                  FREE MODELS ONLY ($0 inference cost)
+                </div>
+                <select id="openrouterSortSelect" class="form-select sort-select" aria-label="Sort models">
+                  <option value="name">Sort by: Name (A-Z)</option>
+                  <option value="context">Sort by: Context Length</option>
+                </select>
+              </div>
+              <div class="free-policy-note">Only models with $0 inference cost are shown. Provider quotas and rate limits may still apply.</div>
+
+              <input
+                type="text"
+                id="openrouterSearchInput"
+                class="form-input search-input"
+                placeholder="Search free models by name, ID, or developer (e.g. llama, meta, mistral)..."
+                aria-label="Search OpenRouter models"
+              />
+            </div>
+
+            <!-- MODELS COUNT AND REFRESH -->
+            <div class="models-header-bar">
+              <span id="openrouterModelsCount" class="models-count-text">0 free models available</span>
+              <button type="button" id="refreshOpenrouterBtn" class="btn btn-ghost btn-xs">↻ Refresh Models</button>
+            </div>
+
+            <!-- MODELS SCROLLABLE LIST -->
+            <div id="openrouterModelListContainer" class="models-list-scrollable" role="region" aria-label="Model list"></div>
+          </div>
+        </div>
+
+        <!-- SELECTED MODEL BANNER -->
+        <div id="openrouterSelectedBanner" class="selected-model-banner" style="display: none;">
+          <div class="selected-model-left">
+            <div class="selected-tag">SELECTED MODEL</div>
+            <div class="selected-title" id="selectedOpenrouterName">None selected</div>
+            <div class="selected-id" id="selectedOpenrouterId">—</div>
+          </div>
+          <div class="selected-actions">
+            <button type="button" id="testOpenrouterModelBtn" class="btn btn-secondary">
+              ⚡ Test Selected Model
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- 2. GOOGLE GEMINI CONFIG PANEL -->
+      <div id="geminiPanel" class="provider-panel" aria-label="Google Gemini Configuration">
+        <div class="panel-header-title">Google Gemini Configuration (Free Tier)</div>
+
+        <!-- API KEY -->
+        <div class="form-group">
+          <label for="geminiKey" class="form-label">API Key</label>
+          <div class="input-with-button">
+            <input
+              type="password"
+              id="geminiKey"
+              class="form-input"
+              placeholder="AIzaSy..."
+              autocomplete="off"
+              spellcheck="false"
+              aria-label="Google Gemini API Key"
+            />
+            <button type="button" id="toggleGeminiKeyBtn" class="btn btn-ghost" aria-label="Show or hide API key">Show</button>
+            <button type="button" id="fetchGeminiModelsBtn" class="btn btn-primary">
+              ⚡ Fetch Models
+            </button>
+          </div>
+          <div class="field-hint">Get a free API key at Google AI Studio (aistudio.google.com). Only free-tier models are available. Stored locally only.</div>
+          <div id="geminiKeyError" class="field-error" style="display: none;"></div>
+        </div>
+
+        <!-- DYNAMIC MODELS AREA -->
+        <div id="geminiModelsArea" class="models-discovery-area">
+          <div class="form-label">Available Free Tier Models</div>
+
+          <div id="geminiEmptyNotice" class="models-empty-state">
+            <span class="empty-icon">✨</span>
+            <div>No Gemini models loaded yet.</div>
+            <div class="empty-sub">Enter your Gemini API key above and click <strong>Fetch Models</strong> to discover free-tier models.</div>
+          </div>
+
+          <div id="geminiLoadedContainer" style="display: none;">
+            <div class="models-toolbar">
+              <div class="toolbar-controls">
+                <div class="free-only-badge">
+                  <span class="free-dot"></span>
+                  FREE TIER MODELS ONLY ($0 inference cost)
+                </div>
+                <select id="geminiSortSelect" class="form-select sort-select" aria-label="Sort Gemini models">
+                  <option value="name">Sort by: Name (A-Z)</option>
+                  <option value="context">Sort by: Context Length</option>
+                </select>
+              </div>
+              <div class="free-policy-note">Only models with $0 inference cost are shown. Provider quotas and rate limits may still apply.</div>
+
+              <input
+                type="text"
+                id="geminiSearchInput"
+                class="form-input search-input"
+                placeholder="Search Gemini models (e.g. gemini-1.5-flash, gemini-2.0)..."
+                aria-label="Search Gemini models"
+              />
+            </div>
+
+            <div class="models-header-bar">
+              <span id="geminiModelsCount" class="models-count-text">0 free models available</span>
+              <button type="button" id="refreshGeminiBtn" class="btn btn-ghost btn-xs">↻ Refresh Models</button>
+            </div>
+
+            <div id="geminiModelListContainer" class="models-list-scrollable" role="region" aria-label="Gemini model list"></div>
+          </div>
+        </div>
+
+        <!-- SELECTED MODEL BANNER -->
+        <div id="geminiSelectedBanner" class="selected-model-banner" style="display: none;">
+          <div class="selected-model-left">
+            <div class="selected-tag">SELECTED MODEL</div>
+            <div class="selected-title" id="selectedGeminiName">None selected</div>
+            <div class="selected-id" id="selectedGeminiId">—</div>
+          </div>
+          <div class="selected-actions">
+            <button type="button" id="testGeminiModelBtn" class="btn btn-secondary">
+              ⚡ Test Selected Model
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- 3. GROQ CONFIG PANEL -->
+      <div id="groqPanel" class="provider-panel" aria-label="Groq Configuration">
+        <div class="panel-header-title">Groq Configuration (Free Plan)</div>
+
+        <!-- API KEY -->
+        <div class="form-group">
+          <label for="groqKey" class="form-label">API Key</label>
+          <div class="input-with-button">
+            <input
+              type="password"
+              id="groqKey"
+              class="form-input"
+              placeholder="gsk_..."
+              autocomplete="off"
+              spellcheck="false"
+              aria-label="Groq API Key"
+            />
+            <button type="button" id="toggleGroqKeyBtn" class="btn btn-ghost" aria-label="Show or hide API key">Show</button>
+            <button type="button" id="fetchGroqModelsBtn" class="btn btn-primary">
+              ⚡ Fetch Models
+            </button>
+          </div>
+          <div class="field-hint">Get a free API key at console.groq.com. Groq offers ultra-fast inference on its free tier. Stored locally only.</div>
+          <div id="groqKeyError" class="field-error" style="display: none;"></div>
+        </div>
+
+        <!-- DYNAMIC MODELS AREA -->
+        <div id="groqModelsArea" class="models-discovery-area">
+          <div class="form-label">Available Free Plan Models</div>
+
+          <div id="groqEmptyNotice" class="models-empty-state">
+            <span class="empty-icon">⚡</span>
+            <div>No Groq models loaded yet.</div>
+            <div class="empty-sub">Enter your Groq API key above and click <strong>Fetch Models</strong> to discover free plan models.</div>
+          </div>
+
+          <div id="groqLoadedContainer" style="display: none;">
+            <div class="models-toolbar">
+              <div class="toolbar-controls">
+                <div class="free-only-badge">
+                  <span class="free-dot"></span>
+                  FREE PLAN MODELS ONLY ($0 inference cost)
+                </div>
+                <select id="groqSortSelect" class="form-select sort-select" aria-label="Sort Groq models">
+                  <option value="name">Sort by: Name (A-Z)</option>
+                  <option value="context">Sort by: Context Length</option>
+                </select>
+              </div>
+              <div class="free-policy-note">Only models with $0 inference cost are shown. Provider quotas and rate limits may still apply.</div>
+
+              <input
+                type="text"
+                id="groqSearchInput"
+                class="form-input search-input"
+                placeholder="Search Groq models (e.g. llama-3.3-70b, mixtral)..."
+                aria-label="Search Groq models"
+              />
+            </div>
+
+            <div class="models-header-bar">
+              <span id="groqModelsCount" class="models-count-text">0 free models available</span>
+              <button type="button" id="refreshGroqBtn" class="btn btn-ghost btn-xs">↻ Refresh Models</button>
+            </div>
+
+            <div id="groqModelListContainer" class="models-list-scrollable" role="region" aria-label="Groq model list"></div>
+          </div>
+        </div>
+
+        <!-- SELECTED MODEL BANNER -->
+        <div id="groqSelectedBanner" class="selected-model-banner" style="display: none;">
+          <div class="selected-model-left">
+            <div class="selected-tag">SELECTED MODEL</div>
+            <div class="selected-title" id="selectedGroqName">None selected</div>
+            <div class="selected-id" id="selectedGroqId">—</div>
+          </div>
+          <div class="selected-actions">
+            <button type="button" id="testGroqModelBtn" class="btn btn-secondary">
+              ⚡ Test Selected Model
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- 4. MISTRAL AI CONFIG PANEL -->
+      <div id="mistralPanel" class="provider-panel" aria-label="Mistral AI Configuration">
+        <div class="panel-header-title">Mistral AI Configuration (Free Mode)</div>
+
+        <!-- API KEY -->
+        <div class="form-group">
+          <label for="mistralKey" class="form-label">API Key</label>
+          <div class="input-with-button">
+            <input
+              type="password"
+              id="mistralKey"
+              class="form-input"
+              placeholder="..."
+              autocomplete="off"
+              spellcheck="false"
+              aria-label="Mistral AI API Key"
+            />
+            <button type="button" id="toggleMistralKeyBtn" class="btn btn-ghost" aria-label="Show or hide API key">Show</button>
+            <button type="button" id="fetchMistralModelsBtn" class="btn btn-primary">
+              ⚡ Fetch Models
+            </button>
+          </div>
+          <div class="field-hint">Get a free API key at console.mistral.ai. Mistral offers free experimental and open models. Stored locally only.</div>
+          <div id="mistralKeyError" class="field-error" style="display: none;"></div>
+        </div>
+
+        <!-- DYNAMIC MODELS AREA -->
+        <div id="mistralModelsArea" class="models-discovery-area">
+          <div class="form-label">Available Free Mode Models</div>
+
+          <div id="mistralEmptyNotice" class="models-empty-state">
+            <span class="empty-icon">🌪️</span>
+            <div>No Mistral models loaded yet.</div>
+            <div class="empty-sub">Enter your Mistral API key above and click <strong>Fetch Models</strong> to discover free mode models.</div>
+          </div>
+
+          <div id="mistralLoadedContainer" style="display: none;">
+            <div class="models-toolbar">
+              <div class="toolbar-controls">
+                <div class="free-only-badge">
+                  <span class="free-dot"></span>
+                  FREE MODE MODELS ONLY ($0 inference cost)
+                </div>
+                <select id="mistralSortSelect" class="form-select sort-select" aria-label="Sort Mistral models">
+                  <option value="name">Sort by: Name (A-Z)</option>
+                  <option value="context">Sort by: Context Length</option>
+                </select>
+              </div>
+              <div class="free-policy-note">Only models with $0 inference cost are shown. Provider quotas and rate limits may still apply.</div>
+
+              <input
+                type="text"
+                id="mistralSearchInput"
+                class="form-input search-input"
+                placeholder="Search Mistral models (e.g. mistral-small, ministral, codestral)..."
+                aria-label="Search Mistral models"
+              />
+            </div>
+
+            <div class="models-header-bar">
+              <span id="mistralModelsCount" class="models-count-text">0 free models available</span>
+              <button type="button" id="refreshMistralBtn" class="btn btn-ghost btn-xs">↻ Refresh Models</button>
+            </div>
+
+            <div id="mistralModelListContainer" class="models-list-scrollable" role="region" aria-label="Mistral model list"></div>
+          </div>
+        </div>
+
+        <!-- SELECTED MODEL BANNER -->
+        <div id="mistralSelectedBanner" class="selected-model-banner" style="display: none;">
+          <div class="selected-model-left">
+            <div class="selected-tag">SELECTED MODEL</div>
+            <div class="selected-title" id="selectedMistralName">None selected</div>
+            <div class="selected-id" id="selectedMistralId">—</div>
+          </div>
+          <div class="selected-actions">
+            <button type="button" id="testMistralModelBtn" class="btn btn-secondary">
+              ⚡ Test Selected Model
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- 5. OLLAMA CONFIG PANEL -->
+      <div id="ollamaPanel" class="provider-panel" aria-label="Ollama Configuration">
+        <div class="panel-header-title">Ollama Configuration (Local / Free)</div>
+
+        <div class="panel-note">
+          <strong>Local AI ($0 Cost)</strong><br />
+          Ollama runs directly on your computer. Inference is completely free and private. No external API key required.
+        </div>
+
+        <div class="form-group">
+          <label for="ollamaEndpoint" class="form-label">Endpoint</label>
+          <div class="input-with-button">
+            <input
+              type="text"
+              id="ollamaEndpoint"
+              class="form-input"
+              placeholder="http://localhost:11434"
+              value="http://localhost:11434"
+              aria-label="Ollama API Endpoint"
+            />
+            <button type="button" id="detectOllamaModelsBtn" class="btn btn-primary">
+              ⚡ Detect Models
+            </button>
+          </div>
+          <div class="field-hint">Default local address: http://localhost:11434</div>
+        </div>
+
+        <!-- OLLAMA MODELS AREA -->
+        <div id="ollamaModelsArea" class="models-discovery-area">
+          <div class="form-label">Installed Local Models</div>
+
+          <div id="ollamaEmptyNotice" class="models-empty-state">
+            <span class="empty-icon">💻</span>
+            <div>No Ollama models detected.</div>
+            <div class="empty-sub">Ensure Ollama is running and click <strong>Detect Models</strong> to list installed models.</div>
+          </div>
+
+          <div id="ollamaLoadedContainer" style="display: none;">
+            <div class="models-toolbar">
+              <div class="toolbar-controls">
+                <div class="free-only-badge">
+                  <span class="free-dot"></span>
+                  LOCAL / FREE INFERENCE ($0 cost)
+                </div>
+                <select id="ollamaSortSelect" class="form-select sort-select" aria-label="Sort Ollama models">
+                  <option value="name">Sort by: Name (A-Z)</option>
+                </select>
+              </div>
+
+              <input
+                type="text"
+                id="ollamaSearchInput"
+                class="form-input search-input"
+                placeholder="Search installed models (e.g. llama3.2, mistral, phi)..."
+                aria-label="Search Ollama models"
+              />
+            </div>
+
+            <div class="models-header-bar">
+              <span id="ollamaModelsCount" class="models-count-text">0 local models detected</span>
+              <button type="button" id="refreshOllamaBtn" class="btn btn-ghost btn-xs">↻ Refresh</button>
+            </div>
+            <div id="ollamaModelListContainer" class="models-list-scrollable" role="region" aria-label="Ollama model list"></div>
+          </div>
+        </div>
+
+        <!-- OLLAMA SELECTED MODEL BANNER -->
+        <div id="ollamaSelectedBanner" class="selected-model-banner" style="display: none;">
+          <div class="selected-model-left">
+            <div class="selected-tag">SELECTED MODEL</div>
+            <div class="selected-title" id="selectedOllamaName">None selected</div>
+            <div class="selected-id" id="selectedOllamaId">—</div>
+          </div>
+          <div class="selected-actions">
+            <button type="button" id="testOllamaModelBtn" class="btn btn-secondary">
+              ⚡ Test Selected Model
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- 6. OFFLINE / BUILT-IN PANEL -->
+      <div id="offlinePanel" class="provider-panel active" aria-label="Offline Mode">
+        <div class="offline-banner">
+          <div class="offline-icon">🛡️</div>
+          <div class="offline-text">
+            <div class="offline-title">BUILT-IN MODE ($0 INFERENCE)</div>
+            <div class="offline-desc">
+              FocusRewire will use its built-in rule-based fallback engine. No external AI service, model selection, or network access required.
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- CONNECTION STATUS -->
+      <div class="status-section">
+        <div class="form-label">Connection Status</div>
+        <div class="status-container" id="statusContainer">
+          <div class="status-pill not-tested" id="statusPill">
+            <span class="status-dot"></span>
+            <span id="statusLabel">Not tested</span>
+          </div>
+          <div class="status-message" id="statusMessage">Configure your provider and test the model.</div>
+        </div>
+      </div>
+
+      <!-- ACTION BUTTONS -->
+      <div class="actions-row">
+        <button type="button" id="saveConfigBtn" class="btn btn-primary" disabled>
+          💾 Save Configuration
+        </button>
+      </div>
+
+    </section>
+
+  </main>
+
+  <!-- QUOTA / RATE LIMIT MODAL (FREE AI ONLY NOTIFICATION) -->
+  <div id="quotaModal" class="quota-modal-overlay" style="display: none;" role="dialog" aria-modal="true" aria-labelledby="quotaModalTitle">
+    <div class="quota-modal">
+      <div class="quota-modal-header">
+        <div class="quota-modal-logo">🎯 FocusRewire</div>
+        <button type="button" class="quota-modal-close" id="closeQuotaModalBtn" aria-label="Close">✕</button>
+      </div>
+      <div class="quota-modal-body">
+        <div class="quota-badge">FREE AI LIMIT REACHED</div>
+        <h2 id="quotaModalTitle" class="quota-title">Free AI usage limit reached</h2>
+        <p class="quota-desc">
+          The free usage limit for <strong id="quotaProviderName">Provider</strong> (<code id="quotaModelName">model</code>) has been reached.
+        </p>
+        <div id="quotaRetryInfo" class="quota-retry-box" style="display: none;"></div>
+        <div class="quota-notice">
+          🛡️ FocusRewire strictly adheres to a <strong>Free-Only AI policy</strong>. No paid model will be selected automatically.
+        </div>
+      </div>
+      <div class="quota-modal-actions">
+        <button type="button" id="quotaChangeModelBtn" class="btn btn-secondary">Change Model</button>
+        <button type="button" id="quotaChangeProviderBtn" class="btn btn-primary">Change Provider</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- TOAST FEEDBACK -->
+  <div id="toast" class="toast" role="status" aria-live="polite">
+    <span>✅</span>
+    <span id="toastMessage">Configuration saved successfully!</span>
+  </div>
+
+  <script src="utils/aiProvider.js"></script>
+  <script src="settings.js"></script>
+</body>
+</html>
