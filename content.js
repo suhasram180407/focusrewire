@@ -96,6 +96,19 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   return false;
 });
 
+// ── STORAGE CHANGE LISTENER ───────────────────────────────────────────────
+chrome.storage?.onChanged?.addListener?.((changes, area) => {
+  if (area !== "local") return;
+  if ("rewireMode" in changes) {
+    rewireMode = Boolean(changes.rewireMode.newValue);
+    if (rewireMode) {
+      activateRewireMode();
+    } else {
+      deactivateRewireMode();
+    }
+  }
+});
+
 // ── ENFORCEMENT CONTROLLER ────────────────────────────────────────────────
 
 function enableEnforcement(profile, mode) {
@@ -928,12 +941,33 @@ function trackTopic(topic) {
 
 function activateRewireMode() {
   if (!location.pathname.match(/^\/($|feed\/)/)) return;
+  if (!document.body) {
+    document.addEventListener("DOMContentLoaded", () => activateRewireMode(), { once: true });
+    return;
+  }
+
+  // Ensure persistent CSS rule so YouTube browse feed is hidden even during hydration/rendering
+  document.documentElement?.setAttribute?.("data-fr-rewire", "active");
+  let rewireStyle = document.getElementById("fr-rewire-style");
+  if (!rewireStyle && (document.head || document.documentElement || document.body)) {
+    rewireStyle = document.createElement("style");
+    rewireStyle.id = "fr-rewire-style";
+    rewireStyle.textContent = `
+      html[data-fr-rewire="active"] ytd-browse[page-subtype="home"],
+      html[data-fr-rewire="active"] #feed,
+      html[data-fr-rewire="active"] ytd-rich-grid-renderer {
+        display: none !important;
+      }
+    `;
+    (document.head || document.documentElement || document.body)?.appendChild(rewireStyle);
+  }
+
   const feed = document.querySelector("ytd-browse");
   if (feed) feed.style.setProperty("display", "none", "important");
 
   const existing = document.getElementById("fr-rewire-dashboard");
   if (existing) {
-    existing.style.display = "flex";
+    existing.style.setProperty("display", "flex", "important");
     const badge = existing.querySelector(".fr-topic-badge");
     if (badge) badge.textContent = focusProfile?.topic || "No active focus session";
     return;
@@ -943,8 +977,8 @@ function activateRewireMode() {
   panel.id = "fr-rewire-dashboard";
   panel.innerHTML = `
     <style>
-      #fr-rewire-dashboard{position:fixed;top:56px;left:0;right:0;bottom:0;background:#0a0a0a;
-        z-index:2147483640;display:flex;flex-direction:column;align-items:center;justify-content:center;
+      #fr-rewire-dashboard{position:fixed;top:56px;left:0;right:0;bottom:0;background:#0a0a0a !important;
+        z-index:2147483647 !important;display:flex !important;flex-direction:column;align-items:center;justify-content:center;
         font-family:'Segoe UI',system-ui,sans-serif;color:#f0f0f0}
       #fr-rewire-dashboard h1{font-size:2.2rem;font-weight:700;color:#ff4444;letter-spacing:-1px;margin-bottom:8px}
       .fr-sub{color:#888;font-size:14px;margin-bottom:32px}
@@ -981,9 +1015,9 @@ function activateRewireMode() {
     <button class="fr-open-dash" id="fr-open-dashboard">View full analytics dashboard →</button>
   `;
   document.body.appendChild(panel);
-  document.getElementById("fr-search-btn").addEventListener("click", frDoSearch);
-  document.getElementById("fr-search-input").addEventListener("keydown", e => { if (e.key === "Enter") frDoSearch(); });
-  document.getElementById("fr-open-dashboard").addEventListener("click", () => chrome.runtime.sendMessage({ type: "OPEN_DASHBOARD" }));
+  document.getElementById("fr-search-btn")?.addEventListener("click", frDoSearch);
+  document.getElementById("fr-search-input")?.addEventListener("keydown", e => { if (e.key === "Enter") frDoSearch(); });
+  document.getElementById("fr-open-dashboard")?.addEventListener("click", () => chrome.runtime.sendMessage({ type: "OPEN_DASHBOARD" }));
   frUpdateStats();
   panel._statsInterval = setInterval(frUpdateStats, 3000);
 }
@@ -1089,10 +1123,11 @@ function showRewireSearchWarning(query) {
 }
 
 function deactivateRewireMode() {
+  document.documentElement?.removeAttribute?.("data-fr-rewire");
   const panel = document.getElementById("fr-rewire-dashboard");
   if (panel) { if (panel._statsInterval) clearInterval(panel._statsInterval); panel.remove(); }
   const feed = document.querySelector("ytd-browse");
-  if (feed) feed.style.display = "";
+  if (feed) feed.style.removeProperty("display");
 }
 
 function restoreDistractingElements() {
